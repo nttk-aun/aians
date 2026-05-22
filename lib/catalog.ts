@@ -59,7 +59,7 @@ export function toAsciiFilename(name: string): string {
   }
 }
 
-async function seedDefaultCatalog(): Promise<CatalogFile> {
+function buildDefaultCatalog(): CatalogFile {
   try {
     const products: CatalogProduct[] = INSURANCE_PRODUCTS.map((p) => ({
       id: p.id,
@@ -73,18 +73,31 @@ async function seedDefaultCatalog(): Promise<CatalogFile> {
       createdAt: new Date().toISOString(),
     }));
 
-    const catalog: CatalogFile = {
+    return {
       products,
       updatedAt: new Date().toISOString(),
     };
+  } catch (error) {
+    logError("buildDefaultCatalog failed", error);
+    throw error;
+  }
+}
+
+async function seedDefaultCatalog(): Promise<CatalogFile> {
+  try {
+    const catalog = buildDefaultCatalog();
 
     if (canPersistJson()) {
-      await writeCatalog(catalog);
+      try {
+        await writeCatalog(catalog);
+      } catch (error) {
+        logError("seedDefaultCatalog persist failed (non-fatal)", error);
+      }
     }
     return catalog;
   } catch (error) {
     logError("seedDefaultCatalog failed", error);
-    throw error;
+    return buildDefaultCatalog();
   }
 }
 
@@ -98,7 +111,7 @@ export async function readCatalog(): Promise<CatalogFile> {
     return seedDefaultCatalog();
   } catch (error) {
     logError("readCatalog failed", error);
-    throw error;
+    return buildDefaultCatalog();
   }
 }
 
@@ -120,10 +133,13 @@ export async function writeCatalog(catalog: CatalogFile): Promise<void> {
 export async function getCatalogProducts(): Promise<CatalogProduct[]> {
   try {
     const catalog = await readCatalog();
-    return catalog.products;
+    if (catalog.products.length > 0) {
+      return catalog.products;
+    }
+    return buildDefaultCatalog().products;
   } catch (error) {
     logError("getCatalogProducts failed", error);
-    throw error;
+    return buildDefaultCatalog().products;
   }
 }
 

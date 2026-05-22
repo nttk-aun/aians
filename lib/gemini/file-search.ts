@@ -138,12 +138,21 @@ export async function getIndexedStatus(): Promise<{
   storeName: string | null;
 }> {
   try {
+    const fromEnv = process.env.GEMINI_FILE_SEARCH_STORE_NAME?.trim();
     const state = await readStoreState();
-    const storeName = state?.storeName ?? null;
+    const storeName = fromEnv || state?.storeName || null;
     const documentCount = state?.documents.length ?? 0;
+    const indexedProducts = (await getCatalogProducts()).filter(
+      (p) => p.indexedAt,
+    ).length;
+
+    const indexed = Boolean(
+      storeName && (documentCount > 0 || indexedProducts > 0),
+    );
+
     return {
-      indexed: Boolean(storeName && documentCount > 0),
-      documentCount,
+      indexed,
+      documentCount: Math.max(documentCount, indexedProducts),
       storeName,
     };
   } catch (error) {
