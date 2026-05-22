@@ -1,10 +1,16 @@
 "use client";
 
-import { INSURANCE_PRODUCTS } from "@/lib/constants";
 import type {
   PlanRecommendation,
   StructuredRecommendation,
 } from "@/lib/recommendation-format";
+
+interface ProductLookup {
+  id: string;
+  provider: string;
+  displayName: string;
+  tagline: string;
+}
 
 function getProductAccent(productId: string): string {
   try {
@@ -23,13 +29,15 @@ function getProductAccent(productId: string): string {
 function PlanCard({
   plan,
   variant,
+  products,
 }: {
   plan: PlanRecommendation;
   variant: "primary" | "alternative";
+  products: ProductLookup[];
 }) {
   try {
     const isPrimary = variant === "primary";
-    const product = INSURANCE_PRODUCTS.find((p) => p.id === plan.productId);
+    const product = products.find((p) => p.id === plan.productId);
 
     return (
       <article
@@ -132,9 +140,11 @@ function PlanCard({
 export default function RecommendationDisplay({
   structured,
   fallbackText,
+  products = [],
 }: {
   structured: StructuredRecommendation | null;
   fallbackText: string;
+  products?: ProductLookup[];
 }) {
   try {
     if (!structured) {
@@ -158,10 +168,18 @@ export default function RecommendationDisplay({
           </p>
         </div>
 
-        <PlanCard plan={structured.primary} variant="primary" />
+        <PlanCard
+          plan={structured.primary}
+          variant="primary"
+          products={products}
+        />
 
         {structured.alternative && (
-          <PlanCard plan={structured.alternative} variant="alternative" />
+          <PlanCard
+            plan={structured.alternative}
+            variant="alternative"
+            products={products}
+          />
         )}
 
         {structured.considerations && structured.considerations.length > 0 && (

@@ -1,150 +1,14 @@
-import {
-  DEFAULT_EMBEDDING_MODEL,
-  DEFAULT_GEMINI_MODEL,
-  INSURANCE_PRODUCTS,
-} from "../constants";
+import { DEFAULT_GEMINI_MODEL } from "../constants";
+import { getCatalogProducts } from "../catalog";
 import { logError, logInfo } from "../logger";
 import {
   parseStructuredRecommendation,
   type StructuredRecommendation,
 } from "../recommendation-format";
 import { formatAnswersForPrompt } from "../quiz";
-import { resolvePdfPath } from "../pdf-path";
 import { getGeminiClient } from "./client";
-import { prepareAsciiUploadPath } from "./upload-pdf";
-import {
-  readStoreState,
-  writeStoreState,
-  type FileSearchStoreState,
-} from "./store-state";
-
-const POLL_MS = 4000;
-const MAX_POLLS = 90;
-
-function sleep(ms: number): Promise<void> {
-  try {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  } catch (error) {
-    throw error;
-  }
-}
-
-async function waitForOperation(
-  operation: Awaited<
-    ReturnType<
-      ReturnType<typeof getGeminiClient>["fileSearchStores"]["uploadToFileSearchStore"]
-    >
-  >,
-): Promise<void> {
-  try {
-    const ai = getGeminiClient();
-    let current = operation;
-
-    for (let i = 0; i < MAX_POLLS; i++) {
-      if (current.done) return;
-      await sleep(POLL_MS);
-      current = await ai.operations.get({ operation: current });
-      logInfo("Polling File Search operation", {
-        attempt: i + 1,
-        done: current.done,
-      });
-    }
-
-    throw new Error("File Search operation timed out");
-  } catch (error) {
-    logError("waitForOperation failed", error);
-    throw error;
-  }
-}
-
-export async function setupFileSearchStore(): Promise<FileSearchStoreState> {
-  try {
-    const existing = await readStoreState();
-    if (existing?.storeName) {
-      logInfo("Reusing existing File Search store", {
-        storeName: existing.storeName,
-      });
-      return existing;
-    }
-
-    const ai = getGeminiClient();
-    const displayName = `aians-insurance-${Date.now()}`;
-
-    const fileSearchStore = await ai.fileSearchStores.create({
-      config: {
-        displayName,
-        embeddingModel: DEFAULT_EMBEDDING_MODEL,
-      },
-    });
-
-    if (!fileSearchStore.name) {
-      throw new Error("Failed to create File Search store");
-    }
-
-    const documents: FileSearchStoreState["documents"] = [];
-
-    for (const product of INSURANCE_PRODUCTS) {
-      const sourcePath = resolvePdfPath(product);
-      const uploadPath = prepareAsciiUploadPath(product);
-
-      logInfo("Uploading PDF to File Search store", {
-        productId: product.id,
-        sourcePath,
-        uploadPath,
-      });
-
-      let operation = await ai.fileSearchStores.uploadToFileSearchStore({
-        file: uploadPath,
-        fileSearchStoreName: fileSearchStore.name,
-        config: {
-          displayName: product.storeLabel,
-          mimeType: "application/pdf",
-          customMetadata: [
-            { key: "product_id", stringValue: product.id },
-            { key: "provider_code", stringValue: product.id.split("_")[0] },
-            { key: "upload_filename", stringValue: product.uploadFilename },
-          ],
-        },
-      });
-
-      await waitForOperation(operation);
-
-      documents.push({
-        productId: product.id,
-        displayName: product.displayName,
-      });
-    }
-
-    const state: FileSearchStoreState = {
-      storeName: fileSearchStore.name,
-      displayName,
-      createdAt: new Date().toISOString(),
-      documents,
-    };
-
-    await writeStoreState(state);
-    return state;
-  } catch (error) {
-    logError("setupFileSearchStore failed", error);
-    throw error;
-  }
-}
-
-export async function getActiveStoreName(): Promise<string> {
-  try {
-    const fromEnv = process.env.GEMINI_FILE_SEARCH_STORE_NAME;
-    if (fromEnv) return fromEnv;
-
-    const state = await readStoreState();
-    if (state?.storeName) return state.storeName;
-
-    const created = await setupFileSearchStore();
-    return created.storeName;
-  } catch (error) {
-    logError("getActiveStoreName failed", error);
-    throw error;
-  }
-}
+import { ensureFileSearchStore } from "./index-document";
+import { readStoreState } from "./store-state";
 
 export interface CitationItem {
   title?: string;
@@ -160,7 +24,6 @@ export interface TokenUsage {
   cachedContentTokenCount?: number;
   thoughtsTokenCount?: number;
   toolUsePromptTokenCount?: number;
-  /** ประมาณการค่าใช้จ่ายจาก totalTokenCount (อัตราปรับได้ใน .env) */
   estimatedCostUsd?: number;
   estimatedCostThb?: number;
   costRateUsdPer1M?: number;
@@ -247,18 +110,63 @@ function parseTokenUsage(
   }
 }
 
+export async function getActiveStoreName(): Promise<string | null> {
+  try {
+    const fromEnv = process.env.GEMINI_FILE_SEARCH_STORE_NAME;
+    if (fromEnv) return fromEnv;
+
+    const state = await readStoreState();
+    if (state?.storeName && state.documents.length > 0) {
+      return state.storeName;
+    }
+
+    return null;
+  } catch (error) {
+    logError("getActiveStoreName failed", error);
+    throw error;
+  }
+}
+
+export async function getIndexedStatus(): Promise<{
+  indexed: boolean;
+  documentCount: number;
+  storeName: string | null;
+}> {
+  try {
+    const state = await readStoreState();
+    const storeName = state?.storeName ?? null;
+    const documentCount = state?.documents.length ?? 0;
+    return {
+      indexed: Boolean(storeName && documentCount > 0),
+      documentCount,
+      storeName,
+    };
+  } catch (error) {
+    logError("getIndexedStatus failed", error);
+    throw error;
+  }
+}
+
 export async function getInsuranceRecommendation(input: {
   answersSummary: { question: string; answer: string }[];
 }): Promise<RecommendationResult> {
   try {
     const storeName = await getActiveStoreName();
-    const ai = getGeminiClient();
+    if (!storeName) {
+      throw new Error(
+        "ยังไม่มีเอกสารประกันในระบบ กรุณาให้ผู้ดูแลอัปโหลดและ index ที่หน้า /admin",
+      );
+    }
 
+    const products = await getCatalogProducts();
+    const ai = getGeminiClient();
     const answerLines = formatAnswersForPrompt(input.answersSummary);
 
-    const productLines = INSURANCE_PRODUCTS.map(
-      (p) => `- ${p.provider} ${p.displayName}: ${p.tagline}`,
-    ).join("\n");
+    const productLines = products
+      .map((p) => `- ${p.provider} ${p.displayName}: ${p.tagline}`)
+      .join("\n");
+
+    const productIds = products.map((p) => p.id).join(", ");
 
     const prompt = `คุณเป็นที่ปรึกษาประกันกลุ่มมืออาชีพภาษาไทย
 
@@ -268,7 +176,7 @@ ${answerLines}
 แผนประกันกลุ่มที่ต้องเปรียบเทียบ (อ่านจาก File Search เท่านั้น):
 ${productLines}
 
-productId ที่ใช้ได้: mt_sme, aia_gpa, vir_se, chubb_smart
+productId ที่ใช้ได้: ${productIds}
 
 งานของคุณ:
 1. ค้นหาและอ่านเอกสารใน File Search
@@ -279,14 +187,14 @@ productId ที่ใช้ได้: mt_sme, aia_gpa, vir_se, chubb_smart
 {
   "summaryOneLine": "ประโยคสรุปสั้นๆ ว่าเหมาะกับแผนไหน",
   "primary": {
-    "productId": "mt_sme",
+    "productId": "id จากรายการ",
     "provider": "ชื่อบริษัท",
     "planName": "ชื่อแผน",
     "whySuitable": ["เหตุผล 1", "เหตุผล 2", "เหตุผล 3"],
     "coverage": ["ความคุ้มครอง 1", "ความคุ้มครอง 2", "ความคุ้มครอง 3"]
   },
   "alternative": {
-    "productId": "aia_gpa",
+    "productId": "id จากรายการ",
     "provider": "...",
     "planName": "...",
     "whySuitable": ["..."],
@@ -296,9 +204,9 @@ productId ที่ใช้ได้: mt_sme, aia_gpa, vir_se, chubb_smart
 }
 
 กฎสำคัญ:
-- whySuitable อย่างน้อย 2 ข้อ อธิบายว่าทำไมเหมาะกับคำตอบแบบสอบถาม
-- coverage อย่างน้อย 3 ข้อ จากเอกสารจริง (เบี้ย ผลประโยชน์ เงื่อนไข)
-- ห้ามแต่งข้อมูลที่ไม่มีในเอกสาร ถ้าไม่พบให้เขียน "ไม่พบในเอกสาร" ในข้อนั้น`;
+- whySuitable อย่างน้อย 2 ข้อ
+- coverage อย่างน้อย 3 ข้อ จากเอกสารจริง
+- ห้ามแต่งข้อมูลที่ไม่มีในเอกสาร`;
 
     const response = await ai.models.generateContent({
       model: DEFAULT_GEMINI_MODEL,
@@ -355,6 +263,37 @@ productId ที่ใช้ได้: mt_sme, aia_gpa, vir_se, chubb_smart
     };
   } catch (error) {
     logError("getInsuranceRecommendation failed", error);
+    throw error;
+  }
+}
+
+/** สำหรับ index ชุดเริ่มต้น (legacy public PDF ใน catalog) */
+export async function indexAllCatalogProducts(): Promise<{
+  indexed: number;
+  storeName: string;
+}> {
+  try {
+    await ensureFileSearchStore();
+    const products = await getCatalogProducts();
+    const state = await readStoreState();
+    const indexedIds = new Set(state?.documents.map((d) => d.productId) ?? []);
+
+    const { indexCatalogProduct } = await import("./index-document");
+    let indexed = 0;
+
+    for (const product of products) {
+      if (indexedIds.has(product.id)) continue;
+      await indexCatalogProduct(product);
+      indexed += 1;
+    }
+
+    const finalState = await readStoreState();
+    return {
+      indexed,
+      storeName: finalState?.storeName ?? "",
+    };
+  } catch (error) {
+    logError("indexAllCatalogProducts failed", error);
     throw error;
   }
 }

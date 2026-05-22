@@ -1,7 +1,7 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { INSURANCE_PRODUCTS } from "@/lib/constants";
 import RecommendationDisplay from "@/components/RecommendationDisplay";
 import {
   CLIENT_ID_HEADER,
@@ -12,6 +12,13 @@ import type { StructuredRecommendation } from "@/lib/recommendation-format";
 import { QUIZ_QUESTIONS } from "@/lib/quiz";
 
 type Step = "welcome" | "quiz" | "loading" | "result";
+
+interface CatalogProductItem {
+  id: string;
+  provider: string;
+  displayName: string;
+  tagline: string;
+}
 
 interface RecommendResponse {
   ok: boolean;
@@ -50,7 +57,7 @@ export default function InsuranceFinder() {
   const [modelUsed, setModelUsed] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [indexed, setIndexed] = useState<boolean | null>(null);
-  const [settingUp, setSettingUp] = useState(false);
+  const [products, setProducts] = useState<CatalogProductItem[]>([]);
   const [rateLimit, setRateLimit] = useState({
     limit: 10,
     used: 0,
@@ -76,13 +83,14 @@ export default function InsuranceFinder() {
 
     async function loadInitialData() {
       try {
-        const setupRes = await fetch("/api/setup");
-        const setupData = await setupRes.json();
-        if (active) {
-          setIndexed(Boolean(setupData.indexed));
+        const productsRes = await fetch("/api/products");
+        const productsData = await productsRes.json();
+        if (active && productsData.ok) {
+          setProducts(productsData.products ?? []);
+          setIndexed(Boolean(productsData.indexed));
         }
       } catch (err) {
-        console.error("[aians] loadInitialData setup failed", err);
+        console.error("[aians] loadInitialData products failed", err);
         if (active) setIndexed(false);
       }
 
@@ -111,26 +119,6 @@ export default function InsuranceFinder() {
       active = false;
     };
   }, []);
-
-  const handleSetupIndex = async () => {
-    try {
-      setSettingUp(true);
-      setError(null);
-      const res = await fetch("/api/setup", { method: "POST" });
-      const data = await res.json();
-      if (!data.ok) {
-        throw new Error(data.error ?? "Setup failed");
-      }
-      setIndexed(true);
-    } catch (err) {
-      console.error("[aians] handleSetupIndex failed", err);
-      setError(
-        err instanceof Error ? err.message : "ไม่สามารถ index เอกสารได้",
-      );
-    } finally {
-      setSettingUp(false);
-    }
-  };
 
   const handleSelectOption = (questionId: string, optionId: string) => {
     try {
@@ -223,17 +211,27 @@ export default function InsuranceFinder() {
               ค้นหาประกันกลุ่มที่เหมาะกับคุณ
             </h1>
           </div>
-          <div className="hidden text-right text-sm sm:block">
-            <p className="text-slate-400">4 แผนตัวอย่าง · RAG</p>
-            <p
-              className={
-                rateLimit.remaining > 0
-                  ? "font-medium text-teal-300"
-                  : "font-medium text-rose-400"
-              }
+          <div className="flex flex-col items-end gap-2 text-sm">
+            <Link
+              href="/admin"
+              className="rounded-full border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-teal-400/50 hover:bg-white/5"
             >
-              วันนี้เหลือ {rateLimit.remaining}/{rateLimit.limit} ครั้ง
-            </p>
+              เข้าสู่ระบบ Admin
+            </Link>
+            <div className="hidden text-right sm:block">
+              <p className="text-slate-400">
+                {products.length} แผนประกัน · RAG
+              </p>
+              <p
+                className={
+                  rateLimit.remaining > 0
+                    ? "font-medium text-teal-300"
+                    : "font-medium text-rose-400"
+                }
+              >
+                วันนี้เหลือ {rateLimit.remaining}/{rateLimit.limit} ครั้ง
+              </p>
+            </div>
           </div>
         </div>
       </header>
@@ -241,18 +239,10 @@ export default function InsuranceFinder() {
       <main className="mx-auto max-w-4xl px-6 py-10">
         {indexed === false && (
           <div className="mb-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-            <p className="font-medium">ยังไม่ได้ index เอกสาร PDF ไปยัง File Search</p>
+            <p className="font-medium">ระบบยังไม่พร้อมให้บริการ</p>
             <p className="mt-1 text-amber-200/80">
-              กดปุ่มด้านล่างครั้งแรก (ใช้เวลาสักครู่) ก่อนทำแบบสอบถาม
+              ยังไม่มีเอกสารประกันที่ index บน Google File Search — ผู้ดูแลต้องอัปโหลดที่หน้า Admin ก่อน
             </p>
-            <button
-              type="button"
-              onClick={handleSetupIndex}
-              disabled={settingUp}
-              className="mt-3 rounded-full bg-amber-400 px-5 py-2 text-sm font-semibold text-slate-900 hover:bg-amber-300 disabled:opacity-60"
-            >
-              {settingUp ? "กำลัง index..." : "Index เอกสารประกัน 4 ไฟล์"}
-            </button>
           </div>
         )}
 
@@ -275,7 +265,7 @@ export default function InsuranceFinder() {
                 พร้อมอ้างอิงแหล่งที่มา
               </p>
               <ul className="mt-6 grid gap-3 sm:grid-cols-2">
-                {INSURANCE_PRODUCTS.map((p) => (
+                {products.map((p) => (
                   <li
                     key={p.id}
                     className="rounded-2xl border border-white/10 bg-slate-900/50 px-4 py-3"
@@ -288,7 +278,7 @@ export default function InsuranceFinder() {
               <button
                 type="button"
                 onClick={() => setStep("quiz")}
-                disabled={indexed === false && !settingUp}
+                disabled={indexed === false}
                 className="mt-8 rounded-full bg-teal-400 px-8 py-3 text-base font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 เริ่มแบบสอบถาม
@@ -390,7 +380,7 @@ export default function InsuranceFinder() {
               กำลังวิเคราะห์ด้วย Gemini File Search...
             </p>
             <p className="mt-2 text-sm text-slate-400">
-              ค้นหาจากเอกสาร PDF ประกันทั้ง 4 แผน
+              ค้นหาจากเอกสาร PDF ประกัน {products.length} แผน
             </p>
           </section>
         )}
@@ -404,6 +394,7 @@ export default function InsuranceFinder() {
               <RecommendationDisplay
                 structured={structuredResult}
                 fallbackText={recommendation}
+                products={products}
               />
             </div>
 
@@ -531,7 +522,7 @@ export default function InsuranceFinder() {
         >
           Gemini File Search
         </a>{" "}
-        · ข้อมูลจากเอกสารตัวอย่างใน public/
+        · ผู้ดูแลจัดการเอกสารที่หน้า Admin
       </footer>
     </div>
   );
