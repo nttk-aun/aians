@@ -20,6 +20,9 @@
 # production
 /build
 
+# gemini file search local state
+/.data
+
 # misc
 .DS_Store
 *.pem
