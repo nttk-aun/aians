@@ -2,6 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { createPagedProductId } from "@/lib/admin/paged-product-id";
+import { parseApiJson } from "@/lib/api-response";
+import { splitPdfFileToPages } from "@/lib/pdf/split-pdf-pages";
 
 interface CatalogProduct {
   id: string;
@@ -31,12 +34,18 @@ export default function AdminPanel() {
   const [displayName, setDisplayName] = useState("");
   const [tagline, setTagline] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState("");
 
   const loadSession = async () => {
     try {
       setLoading(true);
       const res = await fetch("/api/admin/session");
-      const data = await res.json();
+      const data = await parseApiJson<{
+        authenticated?: boolean;
+        indexed?: boolean;
+        documentCount?: number;
+        storeName?: string | null;
+      }>(res);
       setAuthenticated(Boolean(data.authenticated));
       if (data.authenticated) {
         setIndexStatus({
@@ -56,7 +65,13 @@ export default function AdminPanel() {
   const loadDocuments = async () => {
     try {
       const res = await fetch("/api/admin/documents");
-      const data = await res.json();
+      const data = await parseApiJson<{
+        ok: boolean;
+        products?: CatalogProduct[];
+        indexed?: boolean;
+        documentCount?: number;
+        storeName?: string | null;
+      }>(res);
       if (data.ok) {
         setDocuments(data.products ?? []);
         setIndexStatus({
@@ -86,11 +101,12 @@ export default function AdminPanel() {
           password: password.trim(),
         }),
       });
-      const data = await res.json();
+      const data = await parseApiJson<{ ok: boolean; error?: string }>(res);
       if (!data.ok) {
         throw new Error(data.error ?? "เข้าสู่ระบบไม่สำเร็จ");
       }
       setAuthenticated(true);
+      await loadSession();
       await loadDocuments();
     } catch (err) {
       console.error("[aians] handleLogin failed", err);
@@ -120,23 +136,47 @@ export default function AdminPanel() {
       setError(null);
       setSuccess(null);
 
-      const formData = new FormData();
-      formData.append("provider", provider);
-      formData.append("displayName", displayName);
-      formData.append("tagline", tagline);
-      formData.append("file", file);
+      setUploadProgress("กำลังแยก PDF เป็นทีละหน้า...");
+      const pages = await splitPdfFileToPages(file);
+      const productId = createPagedProductId(provider, displayName);
 
-      const res = await fetch("/api/admin/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json();
+      for (const page of pages) {
+        setUploadProgress(
+          `กำลังอัปโหลดและ index หน้า ${page.pageNumber}/${page.totalPages} (${Math.round(page.sizeBytes / 1024)} KB)...`,
+        );
 
-      if (!data.ok) {
-        throw new Error(data.error ?? "อัปโหลดไม่สำเร็จ");
+        const formData = new FormData();
+        formData.append("provider", provider);
+        formData.append("displayName", displayName);
+        formData.append("tagline", tagline);
+        formData.append("originalFilename", file.name);
+        formData.append("productId", productId);
+        formData.append("pageNumber", String(page.pageNumber));
+        formData.append("totalPages", String(page.totalPages));
+        formData.append("isFirstPage", page.pageNumber === 1 ? "true" : "false");
+        formData.append("file", page.blob, page.filename);
+
+        const res = await fetch("/api/admin/upload-page", {
+          method: "POST",
+          body: formData,
+        });
+
+        const data = await parseApiJson<{
+          ok: boolean;
+          error?: string;
+          message?: string;
+        }>(res);
+
+        if (!data.ok) {
+          throw new Error(
+            data.error ??
+              `อัปโหลดหน้า ${page.pageNumber}/${page.totalPages} ไม่สำเร็จ`,
+          );
+        }
       }
 
-      setSuccess(data.message ?? "อัปโหลดและ index สำเร็จ");
+      setSuccess(`อัปโหลดและ index ครบ ${pages.length} หน้าแล้ว`);
+      setUploadProgress("");
       setProvider("");
       setDisplayName("");
       setTagline("");
@@ -147,6 +187,7 @@ export default function AdminPanel() {
       setError(err instanceof Error ? err.message : "อัปโหลดไม่สำเร็จ");
     } finally {
       setUploading(false);
+      setUploadProgress("");
     }
   };
 
@@ -155,7 +196,9 @@ export default function AdminPanel() {
       setUploading(true);
       setError(null);
       const res = await fetch("/api/setup", { method: "POST" });
-      const data = await res.json();
+      const data = await parseApiJson<{ ok: boolean; error?: string; message?: string }>(
+        res,
+      );
       if (!data.ok) throw new Error(data.error ?? "Index ไม่สำเร็จ");
       setSuccess(data.message ?? "Index สำเร็จ");
       await loadDocuments();
@@ -271,8 +314,14 @@ export default function AdminPanel() {
       >
         <h2 className="text-lg font-semibold text-white">เพิ่มแผนประกันใหม่</h2>
         <p className="text-sm text-slate-400">
-          อัปโหลดแล้ว index ทันที — ผู้ใช้ไม่ต้องกด index เอง
+          ระบบแยก PDF เป็นทีละหน้าแล้วส่งเข้า API (ต่ำกว่า 4.5 MB ต่อหน้า) — เหมาะกับ Vercel
         </p>
+        <p className="text-xs text-amber-200/90">
+          PDF 4 ไฟล์ใน public/ แนะนำกด「Index แผนที่ยังค้าง」ด้านล่าง ไม่ต้องอัปโหลดซ้ำ
+        </p>
+        {uploadProgress && (
+          <p className="text-sm text-teal-300">{uploadProgress}</p>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -324,7 +373,7 @@ export default function AdminPanel() {
           disabled={uploading}
           className="rounded-full bg-teal-400 px-6 py-2.5 font-semibold text-slate-950 disabled:opacity-50"
         >
-          {uploading ? "กำลังอัปโหลดและ index..." : "อัปโหลด + Index ไป Google"}
+          {uploading ? "กำลังแยกหน้าและ index..." : "อัปโหลดทีละหน้า + Index ไป Google"}
         </button>
       </form>
 

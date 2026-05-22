@@ -11,6 +11,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       ok: true,
       authenticated,
+      pageUploadMode: true,
       ...indexStatus,
     });
   } catch (error) {

@@ -3,6 +3,8 @@ import { getIndexedStatus, indexAllCatalogProducts } from "@/lib/gemini/file-sea
 import { logError, logInfo } from "@/lib/logger";
 import { isAdminRequest } from "@/lib/admin-request";
 
+export const maxDuration = 300;
+
 export async function GET() {
   try {
     const status = await getIndexedStatus();

@@ -9,9 +9,11 @@ export function getGeminiClient(): GoogleGenAI {
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error(
-        "GEMINI_API_KEY is not set. Add it to .env.local",
-      );
+      const hint =
+        process.env.VERCEL === "1"
+          ? "GEMINI_API_KEY is not set. Add it in Vercel → Settings → Environment Variables, then redeploy."
+          : "GEMINI_API_KEY is not set. Add it to .env.local";
+      throw new Error(hint);
     }
 
     cachedClient = new GoogleGenAI({ apiKey });

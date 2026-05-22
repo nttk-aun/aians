@@ -111,6 +111,81 @@ export async function indexCatalogProduct(
   }
 }
 
+export async function indexCatalogProductPage(input: {
+  product: CatalogProduct;
+  storagePath: string;
+  pageNumber: number;
+  totalPages: number;
+}): Promise<{ storeName: string }> {
+  try {
+    const storeName = await ensureFileSearchStore();
+    const filePath = resolveCatalogPdfPath({
+      ...input.product,
+      storagePath: input.storagePath,
+    });
+
+    try {
+      await fs.access(filePath);
+    } catch {
+      throw new Error(`PDF page file not found: ${filePath}`);
+    }
+
+    const ai = getGeminiClient();
+    const pageLabel = `${input.product.storeLabel} p${input.pageNumber}/${input.totalPages}`;
+
+    logInfo("Indexing PDF page to Gemini File Search", {
+      productId: input.product.id,
+      pageNumber: input.pageNumber,
+      totalPages: input.totalPages,
+      filePath,
+    });
+
+    let operation = await ai.fileSearchStores.uploadToFileSearchStore({
+      file: filePath,
+      fileSearchStoreName: storeName,
+      config: {
+        displayName: pageLabel,
+        mimeType: "application/pdf",
+        customMetadata: [
+          { key: "product_id", stringValue: input.product.id },
+          { key: "provider", stringValue: input.product.provider },
+          { key: "page_number", stringValue: String(input.pageNumber) },
+          { key: "total_pages", stringValue: String(input.totalPages) },
+          { key: "upload_filename", stringValue: input.product.uploadFilename },
+        ],
+      },
+    });
+
+    await waitForOperation(operation);
+
+    const state = (await readStoreState()) ?? {
+      storeName,
+      displayName: "aians-insurance",
+      createdAt: new Date().toISOString(),
+      documents: [],
+    };
+
+    const docKey = `${input.product.id}:p${input.pageNumber}`;
+    if (!state.documents.some((d) => d.productId === docKey)) {
+      state.documents.push({
+        productId: docKey,
+        displayName: `${input.product.displayName} (${input.pageNumber}/${input.totalPages})`,
+      });
+    }
+
+    await writeStoreState(state);
+
+    logInfo("PDF page indexed", {
+      productId: input.product.id,
+      pageNumber: input.pageNumber,
+    });
+    return { storeName };
+  } catch (error) {
+    logError("indexCatalogProductPage failed", error);
+    throw error;
+  }
+}
+
 export async function saveUploadedPdf(
   productId: string,
   uploadFilename: string,
