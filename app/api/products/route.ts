@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { getCatalogProducts } from "@/lib/catalog";
 import { getIndexedStatus } from "@/lib/gemini/file-search";
 import { logError } from "@/lib/logger";
+import {
+  getPersistenceMode,
+  hasRedisEnv,
+  isVercelRuntime,
+} from "@/lib/persistence";
 
 export async function GET() {
   try {
@@ -19,6 +24,11 @@ export async function GET() {
       })),
       indexed: status.indexed,
       documentCount: status.documentCount,
+      runtime: {
+        vercel: isVercelRuntime(),
+        persistence: getPersistenceMode(),
+        redisConfigured: hasRedisEnv(),
+      },
     });
   } catch (error) {
     logError("GET /api/products failed", error);

@@ -1,12 +1,7 @@
-import fs from "fs/promises";
-import path from "path";
 import { logError, logInfo } from "./logger";
+import { readJsonDocument, REDIS_KEYS, writeJsonDocument } from "./persistence";
 
-const RATE_LIMIT_PATH = path.join(
-  process.cwd(),
-  ".data",
-  "daily-rate-limits.json",
-);
+const RATE_LIMIT_RELATIVE = ".data/daily-rate-limits.json";
 
 const DEFAULT_DAILY_LIMIT = 10;
 const TIMEZONE = "Asia/Bangkok";
@@ -54,16 +49,15 @@ function buildStoreKey(dateKey: string, type: "client" | "ip", id: string): stri
 
 async function readStore(): Promise<RateLimitStore> {
   try {
-    const raw = await fs.readFile(RATE_LIMIT_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as RateLimitStore;
+    const parsed = await readJsonDocument<RateLimitStore>(
+      REDIS_KEYS.rateLimits,
+      RATE_LIMIT_RELATIVE,
+    );
     if (parsed?.entries && typeof parsed.entries === "object") {
       return parsed;
     }
     return { entries: {} };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { entries: {} };
-    }
     logError("readStore rate-limit failed", error);
     throw error;
   }
@@ -71,7 +65,6 @@ async function readStore(): Promise<RateLimitStore> {
 
 async function writeStore(store: RateLimitStore): Promise<void> {
   try {
-    await fs.mkdir(path.dirname(RATE_LIMIT_PATH), { recursive: true });
     const today = getTodayKey();
     const pruned: RateLimitStore = { entries: {} };
     for (const [key, count] of Object.entries(store.entries)) {
@@ -79,7 +72,11 @@ async function writeStore(store: RateLimitStore): Promise<void> {
         pruned.entries[key] = count;
       }
     }
-    await fs.writeFile(RATE_LIMIT_PATH, JSON.stringify(pruned, null, 2));
+    await writeJsonDocument(
+      REDIS_KEYS.rateLimits,
+      RATE_LIMIT_RELATIVE,
+      pruned,
+    );
   } catch (error) {
     logError("writeStore rate-limit failed", error);
     throw error;

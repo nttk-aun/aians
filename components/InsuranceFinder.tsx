@@ -43,6 +43,7 @@ interface RecommendResponse {
   code?: string;
   used?: number;
   limit?: number;
+  retryable?: boolean;
 }
 
 export default function InsuranceFinder() {
@@ -159,7 +160,11 @@ export default function InsuranceFinder() {
             dateKey: data.rateLimit?.dateKey ?? "",
           });
         }
-        throw new Error(data.error ?? "ไม่สามารถรับคำแนะนำได้");
+        const friendly =
+          data.code === "GEMINI_UNAVAILABLE" || data.code === "GEMINI_RATE_LIMIT"
+            ? (data.error ?? "บริการ AI ไม่ว่าง กรุณาลองใหม่")
+            : (data.error ?? "ไม่สามารถรับคำแนะนำได้");
+        throw new Error(friendly);
       }
 
       if (data.rateLimit) {

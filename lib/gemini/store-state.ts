@@ -1,7 +1,11 @@
-import fs from "fs/promises";
-import path from "path";
-import { STORE_STATE_PATH } from "../constants";
 import { logError, logInfo } from "../logger";
+import {
+  readJsonDocument,
+  REDIS_KEYS,
+  writeJsonDocument,
+} from "../persistence";
+
+const STORE_STATE_RELATIVE = ".data/file-search-store.json";
 
 export interface FileSearchStoreState {
   storeName: string;
@@ -12,12 +16,11 @@ export interface FileSearchStoreState {
 
 export async function readStoreState(): Promise<FileSearchStoreState | null> {
   try {
-    const raw = await fs.readFile(STORE_STATE_PATH, "utf-8");
-    return JSON.parse(raw) as FileSearchStoreState;
+    return readJsonDocument<FileSearchStoreState>(
+      REDIS_KEYS.storeState,
+      STORE_STATE_RELATIVE,
+    );
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
     logError("readStoreState failed", error);
     throw error;
   }
@@ -27,8 +30,11 @@ export async function writeStoreState(
   state: FileSearchStoreState,
 ): Promise<void> {
   try {
-    await fs.mkdir(path.dirname(STORE_STATE_PATH), { recursive: true });
-    await fs.writeFile(STORE_STATE_PATH, JSON.stringify(state, null, 2));
+    await writeJsonDocument(
+      REDIS_KEYS.storeState,
+      STORE_STATE_RELATIVE,
+      state,
+    );
     logInfo("File Search store state saved", { storeName: state.storeName });
   } catch (error) {
     logError("writeStoreState failed", error);

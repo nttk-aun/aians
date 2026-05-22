@@ -7,6 +7,11 @@ import {
 } from "../recommendation-format";
 import { formatAnswersForPrompt } from "../quiz";
 import { getGeminiClient } from "./client";
+import {
+  GeminiServiceError,
+  generateContentWithRetry,
+  toGeminiServiceError,
+} from "./generate-with-retry";
 import { ensureFileSearchStore } from "./index-document";
 import { readStoreState } from "./store-state";
 
@@ -208,19 +213,23 @@ productId ที่ใช้ได้: ${productIds}
 - coverage อย่างน้อย 3 ข้อ จากเอกสารจริง
 - ห้ามแต่งข้อมูลที่ไม่มีในเอกสาร`;
 
-    const response = await ai.models.generateContent({
-      model: DEFAULT_GEMINI_MODEL,
-      contents: prompt,
-      config: {
-        tools: [
-          {
-            fileSearch: {
-              fileSearchStoreNames: [storeName],
-            },
+    const response = await generateContentWithRetry(
+      () =>
+        ai.models.generateContent({
+          model: DEFAULT_GEMINI_MODEL,
+          contents: prompt,
+          config: {
+            tools: [
+              {
+                fileSearch: {
+                  fileSearchStoreNames: [storeName],
+                },
+              },
+            ],
           },
-        ],
-      },
-    });
+        }),
+      "getInsuranceRecommendation.generateContent",
+    );
 
     const text =
       response.text ??
@@ -263,7 +272,10 @@ productId ที่ใช้ได้: ${productIds}
     };
   } catch (error) {
     logError("getInsuranceRecommendation failed", error);
-    throw error;
+    if (error instanceof GeminiServiceError) {
+      throw error;
+    }
+    throw toGeminiServiceError(error);
   }
 }
 

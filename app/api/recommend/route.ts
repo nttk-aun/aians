@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { CLIENT_ID_HEADER } from "@/lib/client-id";
+import { GeminiServiceError } from "@/lib/gemini/generate-with-retry";
 import { getInsuranceRecommendation } from "@/lib/gemini/file-search";
 import { logError, logInfo } from "@/lib/logger";
 import { buildAnswersSummary } from "@/lib/quiz";
@@ -54,11 +55,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const afterConsume = await consumeRateLimit({ clientId, ip });
-
     logInfo("POST /api/recommend", {
       answerCount: Object.keys(body.answers).length,
-      remaining: afterConsume.remaining,
+      remaining: current.remaining,
     });
 
     const answersSummary = buildAnswersSummary(body.answers);
@@ -66,6 +65,8 @@ export async function POST(request: Request) {
     const result = await getInsuranceRecommendation({
       answersSummary,
     });
+
+    const afterConsume = await consumeRateLimit({ clientId, ip });
 
     return NextResponse.json({
       ok: true,
@@ -80,6 +81,19 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     logError("POST /api/recommend failed", error);
+
+    if (error instanceof GeminiServiceError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: error.message,
+          code: error.code,
+          retryable: error.retryable,
+        },
+        { status: error.httpStatus },
+      );
+    }
+
     const message =
       error instanceof Error ? error.message : "Recommendation failed";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });

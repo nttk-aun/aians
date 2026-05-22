@@ -7,6 +7,7 @@ import {
 } from "../catalog";
 import { DEFAULT_EMBEDDING_MODEL } from "../constants";
 import { logError, logInfo } from "../logger";
+import { getWritableDataDir } from "../persistence";
 import { getGeminiClient } from "./client";
 import { waitForOperation } from "./operations";
 import { readStoreState, writeStoreState } from "./store-state";
@@ -116,11 +117,10 @@ export async function saveUploadedPdf(
   bytes: Buffer,
 ): Promise<string> {
   try {
-    await fs.mkdir(path.join(process.cwd(), ".data", "catalog-pdfs"), {
-      recursive: true,
-    });
+    const pdfDir = path.join(getWritableDataDir(), "catalog-pdfs");
+    await fs.mkdir(pdfDir, { recursive: true });
     const relative = path.join(".data", "catalog-pdfs", uploadFilename);
-    const absolute = path.join(process.cwd(), relative);
+    const absolute = path.join(pdfDir, uploadFilename);
     await fs.writeFile(absolute, bytes);
     return relative;
   } catch (error) {

@@ -1,7 +1,13 @@
-import fs from "fs/promises";
 import path from "path";
 import { INSURANCE_PRODUCTS } from "./constants";
 import { logError, logInfo } from "./logger";
+import {
+  canPersistJson,
+  readJsonDocument,
+  REDIS_KEYS,
+  writeJsonDocument,
+  getWritableDataDir,
+} from "./persistence";
 
 export type ProductId = string;
 
@@ -23,8 +29,8 @@ export interface CatalogFile {
   updatedAt: string;
 }
 
-export const CATALOG_PATH = path.join(process.cwd(), ".data", "catalog.json");
-export const CATALOG_PDF_DIR = path.join(process.cwd(), ".data", "catalog-pdfs");
+export const CATALOG_RELATIVE_PATH = ".data/catalog.json";
+export const CATALOG_PDF_DIR = path.join(getWritableDataDir(), "catalog-pdfs");
 
 export function slugifyId(input: string): string {
   try {
@@ -72,7 +78,9 @@ async function seedDefaultCatalog(): Promise<CatalogFile> {
       updatedAt: new Date().toISOString(),
     };
 
-    await writeCatalog(catalog);
+    if (canPersistJson()) {
+      await writeCatalog(catalog);
+    }
     return catalog;
   } catch (error) {
     logError("seedDefaultCatalog failed", error);
@@ -82,14 +90,13 @@ async function seedDefaultCatalog(): Promise<CatalogFile> {
 
 export async function readCatalog(): Promise<CatalogFile> {
   try {
-    const raw = await fs.readFile(CATALOG_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as CatalogFile;
+    const parsed = await readJsonDocument<CatalogFile>(
+      REDIS_KEYS.catalog,
+      CATALOG_RELATIVE_PATH,
+    );
     if (parsed?.products?.length) return parsed;
     return seedDefaultCatalog();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return seedDefaultCatalog();
-    }
     logError("readCatalog failed", error);
     throw error;
   }
@@ -97,9 +104,12 @@ export async function readCatalog(): Promise<CatalogFile> {
 
 export async function writeCatalog(catalog: CatalogFile): Promise<void> {
   try {
-    await fs.mkdir(path.dirname(CATALOG_PATH), { recursive: true });
     catalog.updatedAt = new Date().toISOString();
-    await fs.writeFile(CATALOG_PATH, JSON.stringify(catalog, null, 2));
+    await writeJsonDocument(
+      REDIS_KEYS.catalog,
+      CATALOG_RELATIVE_PATH,
+      catalog,
+    );
     logInfo("Catalog saved", { count: catalog.products.length });
   } catch (error) {
     logError("writeCatalog failed", error);
@@ -163,6 +173,13 @@ export function resolveCatalogPdfPath(product: CatalogProduct): string {
   try {
     if (path.isAbsolute(product.storagePath)) {
       return product.storagePath;
+    }
+    if (product.storagePath.startsWith("public/")) {
+      return path.join(process.cwd(), product.storagePath);
+    }
+    if (product.storagePath.startsWith(".data/")) {
+      const sub = product.storagePath.replace(/^\.data[\\/]/, "");
+      return path.join(getWritableDataDir(), sub);
     }
     return path.join(process.cwd(), product.storagePath);
   } catch (error) {
