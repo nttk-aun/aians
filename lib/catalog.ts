@@ -69,7 +69,7 @@ async function seedDefaultCatalog(): Promise<CatalogFile> {
       displayName: p.displayName,
       provider: p.provider,
       tagline: p.tagline,
-      storagePath: path.join("public", p.filename),
+      storagePath: path.posix.join("public", p.filename),
       createdAt: new Date().toISOString(),
     }));
 
@@ -171,17 +171,18 @@ export async function markProductIndexed(id: string): Promise<void> {
 
 export function resolveCatalogPdfPath(product: CatalogProduct): string {
   try {
-    if (path.isAbsolute(product.storagePath)) {
-      return product.storagePath;
+    const storagePath = product.storagePath.replace(/\\/g, "/");
+    if (path.isAbsolute(storagePath)) {
+      return storagePath;
     }
-    if (product.storagePath.startsWith("public/")) {
-      return path.join(process.cwd(), product.storagePath);
+    if (storagePath.startsWith("public/")) {
+      return path.join(process.cwd(), ...storagePath.split("/"));
     }
-    if (product.storagePath.startsWith(".data/")) {
-      const sub = product.storagePath.replace(/^\.data[\\/]/, "");
-      return path.join(getWritableDataDir(), sub);
+    if (storagePath.startsWith(".data/")) {
+      const sub = storagePath.replace(/^\.data\//, "");
+      return path.join(getWritableDataDir(), ...sub.split("/"));
     }
-    return path.join(process.cwd(), product.storagePath);
+    return path.join(process.cwd(), ...storagePath.split("/"));
   } catch (error) {
     logError("resolveCatalogPdfPath failed", error);
     throw error;
